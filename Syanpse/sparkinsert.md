@@ -485,35 +485,128 @@ Command took 1.39 minutes -- by xxxx at 11/14/2020, 9:29:35 AM on devcluster
 - jdbc password is the service principal secret.
 
 ```
-var connection:java.sql.Connection = _
-var statement:java.sql.Statement = _
 
-val jdbcUsername = svcname
-val jdbcPassword = scvpsecret
-val jdbcHostname = "servername.database.windows.net" //typically, this is in the form or servername.database.windows.net
+## Create table to hold the data for below
+
+```
+Drop table dbo.factdata2;
+
+create table dbo.factdata2
+(
+id bigint identity(1,1),
+decennialTime varchar(500),
+stateName varchar(500),
+countyName varchar(500),
+population int,
+race varchar(500),
+sex varchar(100)
+)
+WITH ( CLUSTERED COLUMNSTORE INDEX )  
+
+
+select * from dbo.factdata2;
+
+select count(*) from dbo.factdata2;
+
+truncate table dbo.factdata2;
+```
+
+## Now Time to try with Service principal
+
+- Create a Service Principal account
+- Store their token in Azure keyvault
+- Install ADSAL library - com.microsoft.azure:adal4j:1.6.6
+- Install Spark SQL library - com.microsoft.azure:azure-sqldb-spark:1.0.2
+- Lets create the code
+
+- import libraries
+
+```
+import com.microsoft.aad.adal4j.ClientCredential
+import com.microsoft.aad.adal4j.AuthenticationContext
+import java.util.concurrent.Executors
+```
+
+- now configure the service principal information
+
+```
+val TenantId = tenantid
+val authority = "https://login.windows.net/" + TenantId
+val resourceAppIdURI = "https://database.windows.net/"
+val ServicePrincipalId = "svc application id"
+val ServicePrincipalPwd = scvpsecret
+```
+
+- Initiate authenticator
+
+```
+val service = Executors.newFixedThreadPool(1)
+val context = new AuthenticationContext(authority, true, service);
+```
+
+- Now time to get Access Token
+
+```
+//Get access token
+val ClientCred = new ClientCredential(ServicePrincipalId, ServicePrincipalPwd)
+val authResult = context.acquireToken(resourceAppIdURI, ClientCred, null)
+val accessToken = authResult.get().getAccessToken
+```
+
+- now time to create connection properties
+
+```
+val jdbcHostname = "servername.database.windows.net"
 val jdbcPort = 1433
-val jdbcDatabase ="dbname"
-val driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
-val jdbc_url = s"jdbc:sqlserver://${jdbcHostname}:${jdbcPort};database=${jdbcDatabase};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;"
+val jdbcDatabase = "dbname"
+
+// Create the JDBC URL without passing in the user and password parameters.
+val jdbcUrl = s"jdbc:sqlserver://${jdbcHostname}:${jdbcPort};database=${jdbcDatabase}"
+
+// Create a Properties() object to hold the parameters.
+import java.util.Properties
+val connectionProperties = new Properties()
+
+
+connectionProperties.put("accessToken", accessToken)
 ```
 
-- Write to SQL DW using Service principal
-- Still have to test
+- initiate the driver
 
 ```
-connection = DriverManager.getConnection(jdbc_url, jdbcUsername, jdbcPassword)
-
-dffact.take(1000).foreach { row =>
-  //println(row.mkString(",").split(",")(0) + "-" + row.mkString(",").split(",")(1)) 
-    
-    statement = connection.createStatement
-    //true   
-  
-    val valueStr = "'" + row.mkString(",").split(",")(0) + "'," + "'" + row.mkString(",").split(",")(1) + "'," + "'" + row.mkString(",").split(",")(2) + "'," + "'" + row.mkString(",").split(",")(3) + "'," + "'" + row.mkString(",").split(",")(4) + "'," + "'" + row.mkString(",").split(",")(5) + "'," + "'" + row.mkString(",").split(",")(6) + "'," + "'" + row.mkString(",").split(",")(7) + "'"
-
-    println(valueStr)    
-    statement.execute("INSERT INTO " + "dbo.factdata1" + " VALUES (" + valueStr + ")")
-   
-}
-connection.close
+val driverClass = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+connectionProperties.setProperty("Driver", driverClass)
 ```
+
+- Validate the authentication
+
+```
+val df_table = spark.read.jdbc(jdbcUrl, "dbo.test1", connectionProperties)
+display(df_table)
+```
+
+- import save options
+
+```
+import org.apache.spark.sql.SaveMode
+```
+
+- Now only take 1000 rows from 2 million rows table
+
+```
+val dffact1000 = dffact.select(dffact("decennialTime").alias("decennialTime"),dffact("stateName"),dffact("countyName"),dffact("population"),dffact("race")).limit(1000)
+```
+
+- Now write to table
+
+```
+dffact1000.write.mode("append").jdbc(jdbcUrl, "dbo.factdata2", connectionProperties)
+```
+
+- Try to read and validate
+
+```
+val dffact1 = spark.read.jdbc(jdbcUrl, "dbo.factdata2", connectionProperties)
+display(dffact1)
+```
+
