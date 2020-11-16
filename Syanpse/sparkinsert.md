@@ -149,6 +149,8 @@ import sqlContext.implicits._
 val dffact = sqlContext.sql("Select factdata.*, dimstate.StateName as dimStateName, dimcounty.CountyName as dimCountyName, dimrace.Race as dimRace, dimsex.Sex as dimSex from factdata inner join dimstate on factdata.StateName = dimstate.StateName join dimcounty on factdata.countyName = dimcounty.CountyName join dimrace on factdata.race = dimrace.Race join dimsex on factdata.sex = dimsex.Sex")
 ```
 
+## Using databricks bulk connector 
+
 ```
 display(dffact)
 ```
@@ -156,6 +158,7 @@ display(dffact)
 - To write faster using sql username and azure databricks sql dw connector. 
 - Write to table called dbo.factdata
 - bulk write uses polybase to stage and bulk inserts to sql dw
+- No service principal service support
 
 ```
 dffact.write
@@ -195,6 +198,8 @@ Command took 26.57 seconds -- by xxxx at 11/14/2020, 9:18:49 AM on devcluster
 - There are close 2 millions rows of data (2137632).
 - close to 74,000 rows loaded per second
 - Math is 2137632 / 26.57 seconds = 80,453
+
+## Use JDBC driver using sql and service principal authentication
 
 ```
 import org.apache.spark.sql.functions._
@@ -281,7 +286,7 @@ connection.close
 Command took 1.70 minutes -- by xxxx at 11/14/2020, 9:29:35 AM on devcluster
 ```
 
-- JDBC averages about 625 or so records with DW100c
+- JDBC averages about 8 or so records with DW100c
 
 - Now configure service principal account
 - Follow this instruction for adding service principal to Azure SQL DW
@@ -306,6 +311,194 @@ val jdbc_url = s"jdbc:sqlserver://${jdbcHostname}:${jdbcPort};database=${jdbcDat
 ```
 
 - Write to SQL DW using Service principal
+- Still have to test
+
+```
+connection = DriverManager.getConnection(jdbc_url, jdbcUsername, jdbcPassword)
+
+dffact.take(1000).foreach { row =>
+  //println(row.mkString(",").split(",")(0) + "-" + row.mkString(",").split(",")(1)) 
+    
+    statement = connection.createStatement
+    //true   
+  
+    val valueStr = "'" + row.mkString(",").split(",")(0) + "'," + "'" + row.mkString(",").split(",")(1) + "'," + "'" + row.mkString(",").split(",")(2) + "'," + "'" + row.mkString(",").split(",")(3) + "'," + "'" + row.mkString(",").split(",")(4) + "'," + "'" + row.mkString(",").split(",")(5) + "'," + "'" + row.mkString(",").split(",")(6) + "'," + "'" + row.mkString(",").split(",")(7) + "'"
+
+    println(valueStr)    
+    statement.execute("INSERT INTO " + "dbo.factdata1" + " VALUES (" + valueStr + ")")
+   
+}
+connection.close
+```
+
+## Scale Azure Synapse Analytics
+
+- Scale to DW200c
+- Run inserting Bulk using databricks connector
+
+## Using databricks bulk connector 
+
+```
+display(dffact)
+```
+
+- To write faster using sql username and azure databricks sql dw connector. 
+- Write to table called dbo.factdata
+- bulk write uses polybase to stage and bulk inserts to sql dw
+- No service principal service support
+
+```
+dffact.write
+  .format("com.databricks.spark.sqldw")
+  .option("url", jdbcconnstr)
+  .option("forwardSparkAzureStorageCredentials", "true")
+  .option("dbTable", "dbo.factdata")
+  .option("tempDir", "wasbs://containenamer@storagename.blob.core.windows.net/tempfact")
+  .save()
+```
+
+- Note the time taken
+
+```
+Command took 23.60 seconds -- by xxxx at 11/14/2020, 9:14:09 AM on devcluster
+```
+
+- Now change parition
+
+```
+dffact.repartition(10).write
+  .format("com.databricks.spark.sqldw")
+  .option("url", jdbcconnstr)
+  .option("forwardSparkAzureStorageCredentials", "true")
+  .option("dbTable", "dbo.factdata")
+  .option("tempDir", "wasbs://container@storageacct.blob.core.windows.net/tempfact")
+  .mode("overwrite")
+  .save()
+```
+
+- Now the time
+
+```
+Command took 19.76 seconds -- by xxxx at 11/14/2020, 9:18:49 AM on devcluster
+```
+
+- There are close 2 millions rows of data (2137632).
+- close to 74,000 rows loaded per second
+- Math is 2137632 / 23.60 seconds = 90,578
+
+## Use JDBC driver using sql and service principal authentication
+
+```
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+import org.apache.spark.sql._
+import org.apache.hadoop.io.LongWritable
+import org.apache.hadoop.io.Text
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
+```
+
+- now jbdc settings
+
+```
+var connection:java.sql.Connection = _
+var statement:java.sql.Statement = _
+
+val jdbcUsername = "sqluser"
+val jdbcPassword = sqlsapassword
+val jdbcHostname = "servername.database.windows.net" //typically, this is in the form or servername.database.windows.net
+val jdbcPort = 1433
+val jdbcDatabase ="dbname"
+val driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+val jdbc_url = s"jdbc:sqlserver://${jdbcHostname}:${jdbcPort};database=${jdbcDatabase};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;"
+```
+
+- now imports
+
+```
+import org.apache.spark.sql._
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming._
+import java.sql.{Connection,DriverManager,ResultSet}
+```
+
+- Now take the same dataframe and insert using JDBC
+
+```
+connection = DriverManager.getConnection(jdbc_url, jdbcUsername, jdbcPassword)
+
+dffact.take(100).foreach { row =>
+  //println(row.mkString(",").split(",")(0) + "-" + row.mkString(",").split(",")(1)) 
+    
+    statement = connection.createStatement
+    //true   
+  
+    val valueStr = "'" + row.mkString(",").split(",")(0) + "'," + "'" + row.mkString(",").split(",")(1) + "'," + "'" + row.mkString(",").split(",")(2) + "'," + "'" + row.mkString(",").split(",")(3) + "'," + "'" + row.mkString(",").split(",")(4) + "'," + "'" + row.mkString(",").split(",")(5) + "'," + "'" + row.mkString(",").split(",")(6) + "'," + "'" + row.mkString(",").split(",")(7) + "'"
+
+    println(valueStr)    
+    statement.execute("INSERT INTO " + "dbo.factdata1" + " VALUES (" + valueStr + ")")
+   
+}
+connection.close
+```
+
+- Note the time taken
+
+```
+Command took 1.31 minutes -- by  at 11/14/2020, 9:24:41 AM on devcluster
+```
+
+- Now run with parition
+
+```
+connection = DriverManager.getConnection(jdbc_url, jdbcUsername, jdbcPassword)
+
+dffact.repartition(1).take(1000).foreach { row =>
+  //println(row.mkString(",").split(",")(0) + "-" + row.mkString(",").split(",")(1)) 
+    
+    statement = connection.createStatement
+    //true   
+  
+    val valueStr = "'" + row.mkString(",").split(",")(0) + "'," + "'" + row.mkString(",").split(",")(1) + "'," + "'" + row.mkString(",").split(",")(2) + "'," + "'" + row.mkString(",").split(",")(3) + "'," + "'" + row.mkString(",").split(",")(4) + "'," + "'" + row.mkString(",").split(",")(5) + "'," + "'" + row.mkString(",").split(",")(6) + "'," + "'" + row.mkString(",").split(",")(7) + "'"
+
+    println(valueStr)    
+    statement.execute("INSERT INTO " + "dbo.factdata1" + " VALUES (" + valueStr + ")")
+   
+}
+connection.close
+```
+
+```
+Command took 1.39 minutes -- by xxxx at 11/14/2020, 9:29:35 AM on devcluster
+```
+
+- JDBC averages about 9 or so records with DW200c
+
+- Now configure service principal account
+- Follow this instruction for adding service principal to Azure SQL DW
+- https://docs.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-service-principal-tutorial#create-the-service-principal-user-in-azure-sql-database
+- Wait for 20 minutes or so to propagate the changes
+- Store the service principal account name and secret in Azure Keyvault
+- Configure JDBC now
+- If you look below the username is service principal name
+- jdbc password is the service principal secret.
+
+```
+var connection:java.sql.Connection = _
+var statement:java.sql.Statement = _
+
+val jdbcUsername = svcname
+val jdbcPassword = scvpsecret
+val jdbcHostname = "servername.database.windows.net" //typically, this is in the form or servername.database.windows.net
+val jdbcPort = 1433
+val jdbcDatabase ="dbname"
+val driver = "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+val jdbc_url = s"jdbc:sqlserver://${jdbcHostname}:${jdbcPort};database=${jdbcDatabase};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;"
+```
+
+- Write to SQL DW using Service principal
+- Still have to test
 
 ```
 connection = DriverManager.getConnection(jdbc_url, jdbcUsername, jdbcPassword)
