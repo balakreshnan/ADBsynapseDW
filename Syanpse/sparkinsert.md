@@ -8,6 +8,10 @@
 - Insert processed data into Synapse DW using jdbc
 - For Jdbc use service principal and sql user
 
+## Architecture
+
+![alt text](https://github.com/balakreshnan/ADBsynapseDW/blob/main/images/Dataengineering.jpg "Architecture")
+
 ## Setup
 
 - Azure databricks version 7.3
