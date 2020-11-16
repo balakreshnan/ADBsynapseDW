@@ -484,8 +484,6 @@ Command took 1.39 minutes -- by xxxx at 11/14/2020, 9:29:35 AM on devcluster
 - If you look below the username is service principal name
 - jdbc password is the service principal secret.
 
-```
-
 ## Create table to hold the data for below
 
 ```
