@@ -603,6 +603,14 @@ val dffact1000 = dffact.select(dffact("decennialTime").alias("decennialTime"),df
 dffact1000.write.mode("append").jdbc(jdbcUrl, "dbo.factdata2", connectionProperties)
 ```
 
+- Time taken to process 1000 records in DW100c
+
+```
+Command took 1.38 minutes -- by xxxx at 11/16/2020, 2:17:08 PM on devcluster
+```
+
+- so 1000/100 (seconds) = 10 records per second.
+
 - Try to read and validate
 
 ```
